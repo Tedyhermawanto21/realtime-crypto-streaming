@@ -1,0 +1,94 @@
+services:
+  redpanda:
+    image: redpandadata/redpanda:v26.3.1
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=internal://0.0.0.0:29092,external://0.0.0.0:9092
+      - --advertise-kafka-addr=internal://redpanda:29092,external://localhost:9092
+    ports:
+      - "9092:9092"
+
+  redpanda-console:
+    image: redpandadata/console:v3.15.0
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redpanda
+
+  postgres:
+    image: postgres:16.16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crypto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crypto}
+      POSTGRES_DB: ${POSTGRES_DB:-crypto}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  minio:
+    image: bitnamilegacy/minio:2025.7.23
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/bitnami/minio/data
+
+  minio-init:
+    image: amazon/aws-cli:2.42.1
+    depends_on:
+      - minio
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: >
+      /bin/sh -c "
+      sleep 8;
+      aws --endpoint-url http://minio:9000 s3 mb s3://${S3_BUCKET:-crypto-lake} || true;
+      "
+    restart: "no"
+
+  s3-ui:
+    image: cloudlena/s3manager@sha256:37250612d47c5b5e6a3bee80e3f7d47b68d3fa6489279a9eb62ad22d0b0b9746
+    depends_on:
+      - minio
+    environment:
+      ENDPOINT: minio:9000
+      ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      USE_SSL: "false"
+      REGION: us-east-1
+    ports:
+      - "8081:8080"
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/crypto.json
+    depends_on:
+      - postgres
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  pgdata:
+  miniodata:
+  grafanadata:
